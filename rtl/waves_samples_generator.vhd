@@ -48,17 +48,23 @@ architecture rtl of wave_samples_generator is
     -- Internal singals
     -- ******************************************************
 
-    signal quadrant_sel      : unsigned(1 downto 0); -- We always need the two MSBs of the phase, to determine the quadrant
-    signal quadrant_sel_r    : unsigned(1 downto 0);
-    signal read_backward     : std_logic;
-    signal rom_addr          : unsigned(ADDR_WIDTH-3 downto 0);
-    signal mem_addr          : unsigned(ADDR_WIDTH-1 downto 0);
-    signal rom_addr_forward  : unsigned(ADDR_WIDTH-3 downto 0);
-    signal rom_addr_mask     : unsigned(ADDR_WIDTH-3 downto 0); -- Mask defining the direction of reading the ROM based on quadrant
+    signal quadrant_sel          : unsigned(1 downto 0); -- We always need the two MSBs of the phase, to determine the quadrant
+    signal quadrant_sel_r        : unsigned(1 downto 0);
+    signal read_backward         : std_logic;
+    signal rom_addr              : unsigned(ADDR_WIDTH-3 downto 0);
+    signal mem_addr              : unsigned(ADDR_WIDTH-1 downto 0);
+    signal fraction              : unsigned(TRUNCATION_SIZE-1 downto 0);
+    signal rom_addr_forward      : unsigned(ADDR_WIDTH-3 downto 0);
+    signal rom_addr_forward_next : unsigned(ADDR_WIDTH-3 downto 0);
+    signal rom_addr_mask         : unsigned(ADDR_WIDTH-3 downto 0); -- Mask defining the direction of reading the ROM based on quadrant
+    signal rom_addr_next_masked  : unsigned(ADDR_WIDTH-3 downto 0);
 
-    signal rom_data             : unsigned(DAC_WIDTH-2 downto 0);
-    signal rom_data_signed_pos  : signed(DAC_WIDTH-1 downto 0);
-    signal rom_data_signed_neg  : signed(DAC_WIDTH-1 downto 0);
+    signal rom_data_a           : unsigned(DAC_WIDTH-2 downto 0);
+    signal rom_data_b           : unsigned(DAC_WIDTH-2 downto 0);
+    signal delta                : signed(DAC_WIDTH-1 downto 0);
+    signal interp_mul           : signed(TRUNCATION_SIZE+DAC_WIDTH downto 0);
+    signal interp_offset        : signed(DAC_WIDTH downto 0);
+    signal interp_sample        : signed(DAC_WIDTH downto 0);
 
     signal phase_wave_selected      : unsigned(TUNING_WORD_WIDTH-1 downto 0); -- The phase needed for the chosen wave
     signal phase_cosine             : unsigned(TUNING_WORD_WIDTH-1 downto 0); -- Cosine phase
@@ -108,7 +114,7 @@ begin
 -- ************************************
 
     mem_addr <= phase_wave_selected(TUNING_WORD_WIDTH-1 downto TRUNCATION_SIZE);
-
+    fraction <= phase_wave_selected(TRUNCATION_SIZE-1 downto 0);
 
 -- ***********************
 -- * Quadrant choice MUX *
@@ -136,8 +142,28 @@ begin
 
     rom_addr_forward   <= mem_addr(ADDR_WIDTH-3 downto 0);
 
+    process(rom_addr_forward, read_backward)
+    begin
+    if read_backward ='0' then
+        if rom_addr_forward = MAX_ADDR_VALUE then
+            rom_addr_forward_next <= MAX_ADDR_VALUE;
+        else
+            rom_addr_forward_next <= rom_addr_forward + 1;
+        end if;
+    else
+        if rom_addr_forward = 0 then
+            rom_addr_forward_next <= (others => '0');
+        else
+            rom_addr_forward_next <= rom_addr_forward - 1;
+        end if;
+    end if;
+end process;
+
     rom_addr_mask <= (others => read_backward);
     rom_addr <= rom_addr_forward xor rom_addr_mask;
+
+    -- For the next sample read, used in interpolation
+    rom_addr_next_masked <= rom_addr_forward_next xor rom_addr_mask;
 
 -- *********************************
 -- * ROM with sine wave (unsigned) *
@@ -152,16 +178,20 @@ begin
         port map(
             clk      => clk,
             rst_n    => rst_n,
-            addr     => rom_addr,
-            data_out => rom_data
+            addr_a     => rom_addr,
+            addr_b     => rom_addr_next_masked, -- second read on the next sample, used for linear interpolation
+            data_out_a => rom_data_a,
+            data_out_b => rom_data_b
         );
 
 -- ******************************************************
--- Convert to signed 
+-- Interpolation
 -- ******************************************************
 
-    rom_data_signed_pos <= signed('0' & rom_data(DAC_WIDTH-2 downto 0));
-    rom_data_signed_neg <= -signed('0' & rom_data(DAC_WIDTH-2 downto 0));
+    delta <= signed('0' & rom_data_b) - signed('0' & rom_data_a);
+    interp_mul <= delta * signed('0' & fraction);
+    interp_offset <= resize(shift_right(interp_mul, TRUNCATION_SIZE), interp_offset'length);
+    interp_sample <= signed('0' & rom_data_a) + interp_offset;
 
 -- ******************************************************
 -- Handle sign based on quadrant (for sine and cosine)
@@ -172,8 +202,8 @@ begin
  -- 1st Quadrant -> 10 : bellow midpoint, negative amplitude
  -- 1st Quadrant -> 11 : bellow midpoint, negative amplitude   
 
-    wave_sample_value_trig <= rom_data_signed_pos  when quadrant_sel_r(1) = '0' 
-                         else rom_data_signed_neg;
+    wave_sample_value_trig <= interp_sample(DAC_WIDTH-1 downto 0) when quadrant_sel_r(1)='0'
+                              else -interp_sample(DAC_WIDTH-1 downto 0);
 
 -- Other waves
 
@@ -204,7 +234,7 @@ begin
         end if;
     end process;
 
-    process(wave_type_r,phase,wave_sample_value_trig,sawtooth_wave,square_wave)
+    process(wave_type_r,phase,wave_sample_value_trig,sawtooth_wave,square_wave, sawtooth_wave_reverse, triangle_wave)
     begin
         wave_sample_value_mx <= wave_sample_value_trig;
         
