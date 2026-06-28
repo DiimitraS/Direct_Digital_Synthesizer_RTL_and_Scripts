@@ -42,7 +42,7 @@ fsamp = 100e6
 fout_list = [1e3,1e4,5e5,1e6,8e6,1e7,125e5,2e7,25e6,3e7,35e6,40e6,45e6,49e6]
 
 samples_per_cycle_list = [16,32,64,128,256,512,1024,2048,4096,8192]
-
+#samples_per_cycle_list = [16]
 samples_per_cycle_results = []
 # ************************************************************
 # Error calculation (SFDR, MSE, RMS)
@@ -129,29 +129,37 @@ def evaluate_sampling_error(fout):
     rms_error = np.sqrt(mse)
 
     # *****************************************
+    # Interpolation error
+    # *****************************************
+
+    interpolation_error = ((2*np.pi/samples_per_cycle)**2)/8    
+    
+    # *****************************************
     # SFDR
     # *****************************************
 	
     sfdr_db, spur_mag = sfdr_signal(reconstructed,fs=eval_points/duration,msd=5)
 	
-    return mse, rms_error, sfdr_db
+    return mse, rms_error, sfdr_db, interpolation_error
 
 mse_results_fout = []
 rms_results_fout = []
 sfdr_results_fout = []
 fout_results_samples = []
+interp_results = []
 samples_per_cycle_results_fout = []
 
 for fout in fout_list:
 
-    sample_per_cycle = fsamp / fout
+    samples_per_cycle = fsamp / fout
 
-    mse, rms, sfdr = evaluate_sampling_error(fout)
+    mse, rms, sfdr, interp_err = evaluate_sampling_error(fout)
 
-    samples_per_cycle_results_fout.append(sample_per_cycle)
+    samples_per_cycle_results_fout.append(samples_per_cycle)
     fout_results_samples.append(fout)
     mse_results_fout.append(mse)
     rms_results_fout.append(rms)
+    interp_results.append(interp_err)
     sfdr_results_fout.append(sfdr)
 
 print("\nResults for all fout values")
@@ -162,16 +170,18 @@ print(
     f"{'Samples/Cycle':>15} "
     f"{'MSE':>15} "
     f"{'RMS Error':>15} "
+    f"{'Interp. Max Error':>18} "
     f"{'SFDR (dBc)':>12}"
 )
 
 print("-"*90)
 
-for fout, spc, mse, rms, sfdr in zip(
+for fout, spc, mse, rms, interp, sfdr in zip(
         fout_results_samples,
         samples_per_cycle_results_fout,
         mse_results_fout,
         rms_results_fout,
+        interp_results,
         sfdr_results_fout):
 
     print(
@@ -179,6 +189,7 @@ for fout, spc, mse, rms, sfdr in zip(
         f"{spc:15.2f} "
         f"{mse:15.6e} "
         f"{rms:15.6e} "
+        f"{interp:18.6e} "
         f"{sfdr:12.2f}"
     )
 
@@ -186,16 +197,18 @@ mse_results_samples = []
 rms_results_samples = []
 sfdr_results_samples = []
 samples_per_cycle_results_samples = []
+interp_results_samples = []
 
 for samples in samples_per_cycle_list:
 
     fout = fsamp / samples
 
-    mse, rms, sfdr = evaluate_sampling_error(fout)
+    mse, rms, sfdr, interp = evaluate_sampling_error(fout)
 
     samples_per_cycle_results_samples.append(samples)
     mse_results_samples.append(mse)
     rms_results_samples.append(rms)
+    interp_results_samples.append(interp)
     sfdr_results_samples.append(sfdr)
 
 print("\nResults for different sample numbers")
@@ -205,21 +218,24 @@ print(
     f"{'Samples/Cycle':>15} "
     f"{'MSE':>15} "
     f"{'RMS Error':>15} "
+    f"{'Interp. Max Error':>18} "
     f"{'SFDR (dBc)':>12}"
 )
 
 print("-"*90)
 
-for spc, mse, rms, sfdr in zip(
+for spc, mse, rms, interp, sfdr in zip(
         samples_per_cycle_results_samples,
         mse_results_samples,
         rms_results_samples,
+        interp_results_samples,
         sfdr_results_samples):
 
     print(
         f"{spc:15.2f} "
         f"{mse:15.6e} "
         f"{rms:15.6e} "
+        f"{interp:18.6e} "
         f"{sfdr:12.2f}"
     )
 
@@ -228,12 +244,62 @@ for spc, mse, rms, sfdr in zip(
 # Plot
 # ************************************************************
 
+plt.figure(figsize=(8,5))
+
+plt.semilogy(
+    samples_per_cycle_results_samples,
+    rms_results_samples,
+    marker='o',
+    linewidth=2,
+    label='RMS σφάλμα'
+)
+
+plt.semilogy(
+    samples_per_cycle_results_samples,
+    interp_results_samples,
+    marker='s',
+    linewidth=2,
+    label='Θεωρητικό όριο γραμμικής παρεμβολής'
+)
+
+plt.grid(True, which='both')
+
+plt.xlabel("Δείγματα ανά περίοδο")
+
+plt.ylabel("Σφάλμα")
+
+plt.title(
+    "RMS σφάλμα και θεωρητικό όριο\n"
+    "γραμμικής παρεμβολής"
+)
+
+plt.legend()
+
+plt.show()
+
 # SFDR
 plt.figure(figsize=(8,5))
 
 plt.plot(
+    np.array(samples_per_cycle_list),
+    sfdr_results_samples,
+    marker='o')
+
+plt.grid(True)
+
+plt.xlabel("Αιρθμός δειγμάτων ανά κύκλο")
+plt.ylabel("SFDR (dBc)")
+
+plt.title(
+    "DDS Σφάλμα δειγματοληψίας")
+
+plt.show()
+
+plt.figure(figsize=(8,5))
+
+plt.plot(
     np.array(fout_list)/1e6,
-    sfdr_results,
+    sfdr_results_fout,
     marker='o')
 
 plt.grid(True)
@@ -251,8 +317,25 @@ plt.show()
 plt.figure(figsize=(8,5))
 
 plt.plot(
+    np.array(samples_per_cycle_list),
+    mse_results_samples,
+    marker='o')
+
+plt.grid(True)
+
+plt.xlabel("Αιρθμός δειγμάτων ανά κύκλο")
+plt.ylabel("MSE")
+
+plt.title(
+    "DDS Σφάλμα δειγματοληψίας")
+
+plt.show()
+
+plt.figure(figsize=(8,5))
+
+plt.plot(
     np.array(fout_list)/1e6,
-    mse_results,
+    mse_results_fout,
     marker='o')
 
 plt.grid(True)
@@ -270,8 +353,26 @@ plt.show()
 plt.figure(figsize=(8,5))
 
 plt.plot(
+    np.array(samples_per_cycle_list),
+    rms_results_samples,
+    marker='o'
+)
+
+plt.grid(True)
+
+plt.xlabel("Αιρθμός δειγμάτων ανά κύκλο")
+plt.ylabel("RMS Error")
+
+plt.title(
+    "DDS Σφάλμα δειγματοληψίας")
+
+plt.show()
+
+plt.figure(figsize=(8,5))
+
+plt.plot(
     np.array(fout_list)/1e6,
-    rms_results,
+    rms_results_fout,
     marker='o'
 )
 
@@ -287,3 +388,24 @@ plt.title(
 
 plt.show()
 
+# Interpolation error
+plt.figure(figsize=(8,5))
+
+plt.semilogy(
+    samples_per_cycle_results_samples,
+    interp_results_samples,
+    marker='o'
+)
+
+plt.grid(True, which='both')
+
+plt.xlabel("Δείγματα ανά περίοδο")
+
+plt.ylabel("Μέγιστο θεωρητικό σφάλμα παρεμβολής")
+
+plt.title(
+    "Θεωρητικό μέγιστο σφάλμα\n"
+    "γραμμικής παρεμβολής"
+)
+
+plt.show()
